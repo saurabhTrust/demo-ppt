@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walkie-Talkie</title>
+<script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@400;600;700&display=swap');
+
+  :root {
+    --bg: #0d0f0f;
+    --surface: #161a1a;
+    --border: #2a3030;
+    --text: #c8d8d4;
+    --muted: #5a7070;
+    --green: #22d47a;
+    --red: #ff4455;
+    --amber: #f5a623;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Barlow', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(42,48,48,0.3) 39px, rgba(42,48,48,0.3) 40px),
+      repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(42,48,48,0.3) 39px, rgba(42,48,48,0.3) 40px);
+  }
+
+  .device {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 32px 28px;
+    width: 100%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    box-shadow: 0 0 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+  }
+
+  .brand {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  .signal-dots {
+    display: flex;
+    gap: 4px;
+    align-items: flex-end;
+  }
+
+  .signal-dots span {
+    background: var(--muted);
+    border-radius: 2px;
+    width: 4px;
+    transition: background 0.3s;
+  }
+  .signal-dots span:nth-child(1) { height: 6px; }
+  .signal-dots span:nth-child(2) { height: 10px; }
+  .signal-dots span:nth-child(3) { height: 14px; }
+  .signal-dots span:nth-child(4) { height: 18px; }
+  .signal-dots.connected span { background: var(--green); }
+
+  /* Join panel */
+  .join-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .join-panel label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-family: var(--mono);
+  }
+
+  .join-panel input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+  .join-panel input:focus { border-color: var(--muted); }
+  .join-panel input::placeholder { color: var(--muted); }
+
+  .join-btn {
+    background: var(--green);
+    color: #000;
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  .join-btn:hover { opacity: 0.88; }
+  .join-btn:active { transform: scale(0.98); }
+
+  /* Active panel */
+  .active-panel { display: none; flex-direction: column; gap: 20px; }
+
+  .room-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .room-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+  }
+  .room-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--green);
+  }
+
+  /* Status display */
+  .status-display {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .status-display::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    transition: background 0.3s;
+    background: transparent;
+  }
+
+  .status-display.free::before { background: rgba(34,212,122,0.06); }
+  .status-display.busy::before { background: rgba(255,68,85,0.06); }
+
+  .status-indicator {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    margin: 0 auto 16px;
+    position: relative;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+
+  .status-indicator.free {
+    background: radial-gradient(circle, rgba(34,212,122,0.25) 0%, rgba(34,212,122,0.08) 100%);
+    box-shadow: 0 0 24px rgba(34,212,122,0.3), 0 0 0 1px rgba(34,212,122,0.4);
+  }
+
+  .status-indicator.busy {
+    background: radial-gradient(circle, rgba(255,68,85,0.25) 0%, rgba(255,68,85,0.08) 100%);
+    box-shadow: 0 0 24px rgba(255,68,85,0.3), 0 0 0 1px rgba(255,68,85,0.4);
+  }
+
+  .status-indicator::after {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: 50%;
+    transition: background 0.3s;
+  }
+  .status-indicator.free::after { background: var(--green); }
+  .status-indicator.busy::after { background: var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.12); opacity: 0.8; }
+  }
+  .status-indicator.busy::after { animation: pulse 0.8s ease-in-out infinite; }
+
+  .status-text {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: color 0.3s;
+  }
+  .status-text.free { color: var(--green); }
+  .status-text.busy { color: var(--red); }
+
+  .who-talking {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 6px;
+    min-height: 18px;
+    transition: color 0.3s;
+    font-family: var(--sans);
+  }
+  .who-talking.active { color: var(--amber); }
+
+  /* Waveform visualizer */
+  .waveform {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    margin-top: 12px;
+  }
+  .waveform-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: var(--muted);
+    opacity: 0.3;
+    transition: height 0.1s ease, opacity 0.3s;
+  }
+  .waveform-bar.active {
+    opacity: 1;
+    background: var(--red);
+  }
+
+  /* PTT Button */
+  .ptt-btn {
+    width: 100%;
+    border: none;
+    border-radius: 16px;
+    padding: 22px;
+    font-family: var(--sans);
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.1s, box-shadow 0.2s;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+
+  .ptt-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transition: opacity 0.2s;
+    opacity: 0;
+    background: rgba(255,255,255,0.08);
+  }
+
+  .ptt-btn:hover::before { opacity: 1; }
+
+  .ptt-btn.idle {
+    background: linear-gradient(180deg, #1e2a2a 0%, #141e1e 100%);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
+  .ptt-btn.transmitting {
+    background: linear-gradient(180deg, #2a1018 0%, #1a080e 100%);
+    border: 1px solid rgba(255,68,85,0.4);
+    color: var(--red);
+    box-shadow: 0 0 20px rgba(255,68,85,0.2), 0 2px 8px rgba(0,0,0,0.4);
+    transform: scale(0.98);
+  }
+
+  .ptt-btn.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    background: linear-gradient(180deg, #1e2a2a 0%, #141e1e 100%);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .ptt-icon {
+    display: block;
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+
+  /* Peers list */
+  .peers-section { display: flex; flex-direction: column; gap: 8px; }
+  .peers-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-family: var(--mono);
+  }
+  .peers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .peer-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    padding: 6px 10px;
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .peer-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+  .peer-dot.talking { background: var(--red); animation: pulse 0.6s infinite; }
+  .peer-you { color: var(--muted); font-size: 10px; }
+
+  /* Footer */
+  .footer-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  .leave-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .leave-btn:hover { border-color: var(--red); color: var(--red); }
+
+  .user-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  /* Log */
+  .log {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 80px;
+    overflow-y: auto;
+    line-height: 1.6;
+    display: none;
+  }
+
+  .no-peers {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    padding: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="device">
+  <div class="header">
+    <span class="brand">WALKIE-v1.0</span>
+    <div class="signal-dots" id="signal">
+      <span></span><span></span><span></span><span></span>
+    </div>
+  </div>
+
+  <!-- JOIN PANEL -->
+  <div class="join-panel" id="joinPanel">
+    <div>
+      <label>Your name</label>
+      <input type="text" id="usernameInput" placeholder="e.g. alpha" maxlength="20" />
+    </div>
+    <div>
+      <label>Channel</label>
+      <input type="text" id="roomInput" placeholder="e.g. team-ops" maxlength="30" value="demo-channel" />
+    </div>
+    <button class="join-btn" onclick="joinChannel()">JOIN CHANNEL</button>
+  </div>
+
+  <!-- ACTIVE PANEL -->
+  <div class="active-panel" id="activePanel">
+    <div class="room-info">
+      <span class="room-label">CHANNEL</span>
+      <span class="room-name" id="roomDisplay">—</span>
+    </div>
+
+    <div class="status-display free" id="statusDisplay">
+      <div class="status-indicator free" id="statusIndicator"></div>
+      <div class="status-text free" id="statusText">CHANNEL FREE</div>
+      <div class="who-talking" id="whoTalking"></div>
+      <div class="waveform" id="waveform">
+        <div class="waveform-bar" style="height:6px"></div>
+        <div class="waveform-bar" style="height:10px"></div>
+        <div class="waveform-bar" style="height:16px"></div>
+        <div class="waveform-bar" style="height:22px"></div>
+        <div class="waveform-bar" style="height:16px"></div>
+        <div class="waveform-bar" style="height:10px"></div>
+        <div class="waveform-bar" style="height:6px"></div>
+        <div class="waveform-bar" style="height:10px"></div>
+        <div class="waveform-bar" style="height:18px"></div>
+        <div class="waveform-bar" style="height:26px"></div>
+        <div class="waveform-bar" style="height:18px"></div>
+        <div class="waveform-bar" style="height:10px"></div>
+        <div class="waveform-bar" style="height:6px"></div>
+      </div>
+    </div>
+
+    <button class="ptt-btn idle" id="pttBtn"
+      onmousedown="startTalk()" onmouseup="stopTalk()"
+      ontouchstart="startTalk(event)" ontouchend="stopTalk(event)">
+      <span class="ptt-icon">🎙</span>
+      HOLD TO TALK
+    </button>
+
+    <div class="peers-section">
+      <div class="peers-label">MEMBERS IN CHANNEL</div>
+      <div class="peers-list" id="peersList">
+        <div class="no-peers">No other members yet</div>
+      </div>
+    </div>
+
+    <div class="footer-row">
+      <button class="leave-btn" onclick="leaveChannel()">LEAVE</button>
+      <span class="user-tag" id="userTag">—</span>
+    </div>
+
+    <div class="log" id="logBox"></div>
+  </div>
+</div>
+
+<script>
+// ─── Config ──────────────────────────────────────────────────────────────────
+const GUN_PEERS = ['https://dchat.staging.trustgrid.com/gun'];
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let gun, room, myId, myName, myChannel;
+let localStream = null;
+let isTalking = false;
+let channelBusy = false;
+let whoIsTalking = null;
+
+const peers = {};           // peerId → { name, pc, connected, pendingCandidates[] }
+const remoteAudios = {};    // peerId → HTMLAudioElement
+const offerSent = new Set();     // guard: don't send offer twice
+const signalSeen = new Set();    // guard: deduplicate Gun .on() re-fires
+
+// ─── Waveform ────────────────────────────────────────────────────────────────
+let waveInterval = null;
+function startWaveform() {
+  const bars = document.querySelectorAll('.waveform-bar');
+  bars.forEach(b => b.classList.add('active'));
+  waveInterval = setInterval(() => {
+    bars.forEach(b => { b.style.height = (4 + Math.random() * 26) + 'px'; });
+  }, 90);
+}
+function stopWaveform() {
+  const bars = document.querySelectorAll('.waveform-bar');
+  bars.forEach(b => { b.classList.remove('active'); b.style.height = '6px'; });
+  if (waveInterval) { clearInterval(waveInterval); waveInterval = null; }
+}
+
+// ─── UI ──────────────────────────────────────────────────────────────────────
+function setChannelState(busy, name) {
+  channelBusy = busy;
+  whoIsTalking = name;
+  const disp = document.getElementById('statusDisplay');
+  const ind  = document.getElementById('statusIndicator');
+  const txt  = document.getElementById('statusText');
+  const who  = document.getElementById('whoTalking');
+  const btn  = document.getElementById('pttBtn');
+  if (busy) {
+    disp.className = 'status-display busy';
+    ind.className  = 'status-indicator busy';
+    txt.className  = 'status-text busy';
+    txt.textContent = 'TRANSMITTING';
+    who.className  = 'who-talking active';
+    who.textContent = name ? `▶ ${name}` : '';
+    startWaveform();
+    if (!isTalking) { btn.className = 'ptt-btn disabled'; btn.disabled = true; }
+  } else {
+    disp.className = 'status-display free';
+    ind.className  = 'status-indicator free';
+    txt.className  = 'status-text free';
+    txt.textContent = 'CHANNEL FREE';
+    who.className  = 'who-talking';
+    who.textContent = '';
+    stopWaveform();
+    btn.className = 'ptt-btn idle'; btn.disabled = false;
+  }
+  renderPeers();
+}
+
+function log(msg) {
+  const box = document.getElementById('logBox');
+  box.style.display = 'block';
+  box.innerHTML += `<div>${new Date().toLocaleTimeString()} — ${msg}</div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderPeers() {
+  const list = document.getElementById('peersList');
+  const ids = Object.keys(peers);
+  if (!ids.length) { list.innerHTML = '<div class="no-peers">No other members yet</div>'; return; }
+  list.innerHTML = ids.map(pid => {
+    const p = peers[pid];
+    const talking = whoIsTalking && whoIsTalking === p.name;
+    return `<div class="peer-item">
+      <div class="peer-dot ${talking ? 'talking' : ''}"></div>
+      <span>${p.name}</span>
+      ${p.connected ? '<span style="color:var(--green);margin-left:auto;font-size:10px">●</span>'
+                    : '<span style="color:var(--muted);margin-left:auto;font-size:10px">connecting…</span>'}
+    </div>`;
+  }).join('');
+}
+
+// ─── Join ─────────────────────────────────────────────────────────────────────
+async function joinChannel() {
+  myName    = document.getElementById('usernameInput').value.trim() || ('anon-' + Math.floor(Math.random()*999));
+  myChannel = document.getElementById('roomInput').value.trim() || 'default';
+  // Unique ID: name + random suffix so two tabs with same name don't collide
+  myId = myName + '::' + Math.random().toString(36).slice(2, 9);
+
+  document.getElementById('joinPanel').style.display = 'none';
+  document.getElementById('activePanel').style.display = 'flex';
+  document.getElementById('roomDisplay').textContent = '#' + myChannel;
+  document.getElementById('userTag').textContent = myName;
+
+  gun  = Gun(GUN_PEERS);
+  room = gun.get('walkie2-' + myChannel);   // new namespace so old stale data doesn't interfere
+
+  document.getElementById('signal').classList.add('connected');
+
+  // ── Get mic first so tracks are ready before we create any PeerConnections ──
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    localStream.getAudioTracks().forEach(t => t.enabled = false);
+    log('Mic ready ✓');
+  } catch(e) {
+    log('Mic error: ' + e.message);
+  }
+
+  // ── Announce ourselves ──
+  room.get('members').get(myId).put({ name: myName, online: true, ts: Date.now() });
+
+  // ── Watch members ──
+  room.get('members').map().on((data, peerId) => {
+    if (!data || peerId === myId) return;
+
+    if (data.online) {
+      if (!peers[peerId]) {
+        // New peer appeared
+        peers[peerId] = { name: data.name, pc: null, connected: false, pendingCandidates: [] };
+        log(`${data.name} joined`);
+        renderPeers();
+      }
+      // Polite offer: whoever has the lexicographically smaller ID sends the offer
+      // This ensures exactly ONE side initiates, eliminating double-offer
+      if (!offerSent.has(peerId) && myId < peerId) {
+        offerSent.add(peerId);
+        createOffer(peerId, data.name);
+      }
+    } else {
+      if (peers[peerId]) {
+        log(`${peers[peerId].name} left`);
+        closePeer(peerId);
+        delete peers[peerId];
+        offerSent.delete(peerId);
+        renderPeers();
+      }
+    }
+  });
+
+  // ── Watch signaling channel for messages addressed to me ──
+  // Key format: TO__FROM  — so we only pick up keys that start with our ID
+  room.get('sig').map().on((raw, key) => {
+    if (!raw || !key.startsWith(myId + '__')) return;
+    // Deduplicate: Gun fires .on() every time the node is updated
+    const dedupeKey = key + '::' + raw;
+    if (signalSeen.has(dedupeKey)) return;
+    signalSeen.add(dedupeKey);
+    const fromId = key.slice(myId.length + 2); // strip "MYID__"
+    handleSignal(fromId, raw).catch(e => log('Signal err: ' + e.message));
+  });
+
+  // ── Watch PTT state ──
+  room.get('ptt').on((data) => {
+    if (!data) return;
+    if (data.who === myId) return;          // ignore our own echo
+    setChannelState(!!data.talking, data.whoName || null);
+  });
+
+  // ── Keepalive presence ──
+  setInterval(() => {
+    room.get('members').get(myId).put({ name: myName, online: true, ts: Date.now() });
+  }, 12000);
+}
+
+// ─── WebRTC helpers ───────────────────────────────────────────────────────────
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ]
+};
+
+function buildPC(peerId) {
+  // Close any existing PC first (reconnect scenario)
+  if (peers[peerId]?.pc) {
+    peers[peerId].pc.close();
+    peers[peerId].pc = null;
+  }
+
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  peers[peerId].pc = pc;
+  peers[peerId].pendingCandidates = [];
+
+  // Add local audio
+  if (localStream) {
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  }
+
+  // Remote audio
+  pc.ontrack = (e) => {
+    let audio = remoteAudios[peerId];
+    if (!audio) {
+      audio = new Audio();
+      audio.autoplay = true;
+      remoteAudios[peerId] = audio;
+    }
+    audio.srcObject = e.streams[0];
+  };
+
+  // ICE — bundle candidates, send after a short delay to reduce Gun writes
+  let iceTimer = null;
+  const iceBatch = [];
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    iceBatch.push(e.candidate);
+    clearTimeout(iceTimer);
+    iceTimer = setTimeout(() => {
+      sendSignal(peerId, { type: 'candidates', list: iceBatch.splice(0) });
+    }, 100);
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (!peers[peerId]) return;
+    const state = pc.connectionState;
+    peers[peerId].connected = state === 'connected';
+    renderPeers();
+    if (state === 'connected') log(`✓ Connected to ${peers[peerId].name}`);
+    if (state === 'failed') {
+      log(`✗ Failed → ${peers[peerId].name}, retrying…`);
+      // Retry: the higher-ID side will re-offer
+      if (myId > peerId && !offerSent.has('retry-' + peerId)) {
+        offerSent.add('retry-' + peerId);
+        setTimeout(() => createOffer(peerId, peers[peerId].name), 1000);
+      }
+    }
+  };
+
+  return pc;
+}
+
+async function createOffer(peerId, peerName) {
+  if (!peers[peerId]) peers[peerId] = { name: peerName, pc: null, connected: false, pendingCandidates: [] };
+  const pc = buildPC(peerId);
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  sendSignal(peerId, { type: 'offer', sdp: pc.localDescription.sdp, fromName: myName });
+  log(`Offer → ${peerName}`);
+}
+
+async function handleSignal(fromId, raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch(e) { return; }
+
+  if (!peers[fromId]) {
+    peers[fromId] = { name: msg.fromName || fromId, pc: null, connected: false, pendingCandidates: [] };
+    renderPeers();
+  }
+
+  if (msg.type === 'offer') {
+    // Don't handle if we already sent them an offer and we're the lower ID (glare resolution)
+    if (offerSent.has(fromId) && myId < fromId) {
+      log(`Glare with ${peers[fromId].name}, ignoring their offer`);
+      return;
+    }
+    const pc = buildPC(fromId);
+    await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+
+    // Flush any buffered candidates
+    for (const c of peers[fromId].pendingCandidates) {
+      await pc.addIceCandidate(c).catch(() => {});
+    }
+    peers[fromId].pendingCandidates = [];
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendSignal(fromId, { type: 'answer', sdp: pc.localDescription.sdp, fromName: myName });
+    renderPeers();
+    log(`Answer → ${peers[fromId].name}`);
+  }
+
+  else if (msg.type === 'answer') {
+    const pc = peers[fromId]?.pc;
+    if (pc && pc.signalingState === 'have-local-offer') {
+      await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      // Flush buffered candidates
+      for (const c of peers[fromId].pendingCandidates) {
+        await pc.addIceCandidate(c).catch(() => {});
+      }
+      peers[fromId].pendingCandidates = [];
+    }
+  }
+
+  else if (msg.type === 'candidates') {
+    const pc = peers[fromId]?.pc;
+    for (const cand of (msg.list || [])) {
+      if (pc && pc.remoteDescription) {
+        await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+      } else {
+        // Buffer until remote description is set
+        peers[fromId].pendingCandidates.push(new RTCIceCandidate(cand));
+      }
+    }
+  }
+}
+
+function sendSignal(toPeerId, payload) {
+  // Key = TO__FROM, value = JSON string
+  const key = toPeerId + '__' + myId;
+  // Append a tiny timestamp so Gun treats each message as a new value
+  payload._t = Date.now();
+  room.get('sig').get(key).put(JSON.stringify(payload));
+}
+
+function closePeer(peerId) {
+  peers[peerId]?.pc?.close();
+  if (remoteAudios[peerId]) { remoteAudios[peerId].srcObject = null; delete remoteAudios[peerId]; }
+}
+
+// ─── PTT ─────────────────────────────────────────────────────────────────────
+function startTalk(e) {
+  if (e) e.preventDefault();
+  if (channelBusy || isTalking) return;
+  if (!localStream) { log('No mic!'); return; }
+
+  isTalking = true;
+  localStream.getAudioTracks().forEach(t => t.enabled = true);
+
+  const btn = document.getElementById('pttBtn');
+  btn.className = 'ptt-btn transmitting';
+  btn.innerHTML = '<span class="ptt-icon">📡</span>TRANSMITTING…';
+
+  setChannelState(true, myName);
+  room.get('ptt').put({ talking: true, who: myId, whoName: myName, ts: Date.now() });
+}
+
+function stopTalk(e) {
+  if (e) e.preventDefault();
+  if (!isTalking) return;
+
+  isTalking = false;
+  if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = false);
+
+  const btn = document.getElementById('pttBtn');
+  btn.className = 'ptt-btn idle';
+  btn.innerHTML = '<span class="ptt-icon">🎙</span>HOLD TO TALK';
+
+  setChannelState(false, null);
+  room.get('ptt').put({ talking: false, who: myId, whoName: null, ts: Date.now() });
+}
+
+// ─── Leave ───────────────────────────────────────────────────────────────────
+function leaveChannel() {
+  if (isTalking) stopTalk();
+  room?.get('members').get(myId).put({ name: myName, online: false, ts: Date.now() });
+  Object.keys(peers).forEach(pid => closePeer(pid));
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  document.getElementById('activePanel').style.display = 'none';
+  document.getElementById('joinPanel').style.display = 'flex';
+  document.getElementById('signal').classList.remove('connected');
+}
+
+// ─── Cleanup ─────────────────────────────────────────────────────────────────
+document.addEventListener('visibilitychange', () => { if (document.hidden && isTalking) stopTalk(); });
+window.addEventListener('beforeunload', () => {
+  if (myId && room) room.get('members').get(myId).put({ name: myName, online: false, ts: Date.now() });
+  if (isTalking) stopTalk();
+});
+document.getElementById('pttBtn')?.addEventListener('contextmenu', e => e.preventDefault());
+</script>
+</body>
+</html>
