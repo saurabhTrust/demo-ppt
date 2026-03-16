@@ -547,23 +547,52 @@ function renderPeers() {
   const list = document.getElementById('peersList');
   const ids = Object.keys(peers);
   if (!ids.length) { list.innerHTML = '<div class="no-peers">No other members yet</div>'; return; }
+  const now = Date.now();
   list.innerHTML = ids.map(pid => {
     const p = peers[pid];
     const talking = whoIsTalking && whoIsTalking === p.name;
+    // Show "connecting…" only for first 8s, then "●" (present but no direct WebRTC)
+    const age = now - (p.joinedAt || now);
+    let statusHtml;
+    if (p.connected) {
+      statusHtml = '<span style="color:var(--green);margin-left:auto;font-size:10px">● live</span>';
+    } else if (age < 8000) {
+      statusHtml = '<span style="color:var(--muted);margin-left:auto;font-size:10px">connecting…</span>';
+    } else {
+      statusHtml = '<span style="color:var(--muted);margin-left:auto;font-size:10px">● online</span>';
+    }
     return `<div class="peer-item">
       <div class="peer-dot ${talking ? 'talking' : ''}"></div>
       <span>${p.name}</span>
-      ${p.connected ? '<span style="color:var(--green);margin-left:auto;font-size:10px">●</span>'
-                    : '<span style="color:var(--muted);margin-left:auto;font-size:10px">connecting…</span>'}
+      ${statusHtml}
     </div>`;
   }).join('');
+}
+
+// ─── Presence timeout: members not heard from in >20s are considered offline ──
+const PRESENCE_TTL = 20000;
+let presenceChecker = null;
+
+function checkStalePresence() {
+  const now = Date.now();
+  let changed = false;
+  for (const pid of Object.keys(peers)) {
+    const p = peers[pid];
+    if (p.lastSeen && (now - p.lastSeen) > PRESENCE_TTL) {
+      log(`${p.name} timed out`);
+      closePeer(pid);
+      delete peers[pid];
+      offerSent.delete(pid);
+      changed = true;
+    }
+  }
+  if (changed) renderPeers();
 }
 
 // ─── Join ─────────────────────────────────────────────────────────────────────
 async function joinChannel() {
   myName    = document.getElementById('usernameInput').value.trim() || ('anon-' + Math.floor(Math.random()*999));
   myChannel = document.getElementById('roomInput').value.trim() || 'default';
-  // Unique ID: name + random suffix so two tabs with same name don't collide
   myId = myName + '::' + Math.random().toString(36).slice(2, 9);
 
   document.getElementById('joinPanel').style.display = 'none';
@@ -572,11 +601,12 @@ async function joinChannel() {
   document.getElementById('userTag').textContent = myName;
 
   gun  = Gun(GUN_PEERS);
-  room = gun.get('walkie2-' + myChannel);   // new namespace so old stale data doesn't interfere
+  // Use a versioned namespace + channel. Change version to wipe all stale Gun data.
+  room = gun.get('walkie3-' + myChannel);
 
   document.getElementById('signal').classList.add('connected');
 
-  // ── Get mic first so tracks are ready before we create any PeerConnections ──
+  // ── Get mic first ──
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.getAudioTracks().forEach(t => t.enabled = false);
@@ -588,31 +618,37 @@ async function joinChannel() {
   // ── Announce ourselves ──
   room.get('members').get(myId).put({ name: myName, online: true, ts: Date.now() });
 
-  // ── Watch members ──
+  // ── Watch members — ignore entries older than PRESENCE_TTL ──
   room.get('members').map().on((data, peerId) => {
     if (!data || peerId === myId) return;
 
-    if (data.online) {
-      if (!peers[peerId]) {
-        // If same name exists under a different peerId (reconnect), close the old one
-        const dupId = Object.keys(peers).find(pid => pid !== peerId && peers[pid].name === data.name);
-        if (dupId) {
-          closePeer(dupId);
-          delete peers[dupId];
-          offerSent.delete(dupId);
-        }
-        // New peer appeared
-        peers[peerId] = { name: data.name, pc: null, connected: false, pendingCandidates: [] };
-        log(`${data.name} joined`);
-        renderPeers();
+    const age = Date.now() - (data.ts || 0);
+
+    if (data.online && age < PRESENCE_TTL) {
+      // Update lastSeen for existing peer
+      if (peers[peerId]) {
+        peers[peerId].lastSeen = Date.now();
+        return; // already knew about them
       }
-      // Polite offer: whoever has the lexicographically smaller ID sends the offer
-      // This ensures exactly ONE side initiates, eliminating double-offer
+
+      // Remove stale dup with same name
+      const dupId = Object.keys(peers).find(pid => pid !== peerId && peers[pid].name === data.name);
+      if (dupId) {
+        closePeer(dupId);
+        delete peers[dupId];
+        offerSent.delete(dupId);
+      }
+
+      peers[peerId] = { name: data.name, pc: null, connected: false, pendingCandidates: [], lastSeen: Date.now(), joinedAt: Date.now() };
+      log(`${data.name} joined`);
+      renderPeers();
+
       if (!offerSent.has(peerId) && myId < peerId) {
         offerSent.add(peerId);
         createOffer(peerId, data.name);
       }
     } else {
+      // Explicitly offline OR stale timestamp → remove
       if (peers[peerId]) {
         log(`${peers[peerId].name} left`);
         closePeer(peerId);
@@ -623,15 +659,13 @@ async function joinChannel() {
     }
   });
 
-  // ── Watch signaling channel for messages addressed to me ──
-  // Key format: TO__FROM  — so we only pick up keys that start with our ID
+  // ── Watch signaling ──
   room.get('sig').map().on((raw, key) => {
     if (!raw || !key.startsWith(myId + '__')) return;
-    // Deduplicate: Gun fires .on() every time the node is updated
     const dedupeKey = key + '::' + raw;
     if (signalSeen.has(dedupeKey)) return;
     signalSeen.add(dedupeKey);
-    const fromId = key.slice(myId.length + 2); // strip "MYID__"
+    const fromId = key.slice(myId.length + 2);
     handleSignal(fromId, raw).catch(e => log('Signal err: ' + e.message));
   });
 
@@ -639,11 +673,13 @@ async function joinChannel() {
   let staleTimer = null;
   room.get('ptt').on((data) => {
     if (!data) return;
-    if (data.who === myId) return;          // ignore our own echo
+    if (data.who === myId) return;
     if (data.talking) {
+      // Ignore PTT from someone not in our peer list (stale Gun data)
+      const pttAge = Date.now() - (data.ts || 0);
+      if (pttAge > 8000) return;
       setChannelState(true, data.whoName || null);
       lastPttTs = data.ts || Date.now();
-      // Auto-release if no heartbeat for 6s (handles tab-close / crash)
       clearTimeout(staleTimer);
       staleTimer = setTimeout(() => {
         if (channelBusy && !isTalking) {
@@ -657,10 +693,13 @@ async function joinChannel() {
     }
   });
 
-  // ── Keepalive presence ──
+  // ── Keepalive: ping our presence every 8s ──
   setInterval(() => {
     room.get('members').get(myId).put({ name: myName, online: true, ts: Date.now() });
-  }, 12000);
+  }, 8000);
+
+  // ── Stale presence checker: sweep every 10s ──
+  presenceChecker = setInterval(checkStalePresence, 10000);
 
   // ── Start PTT heartbeat ──
   startPttHeartbeat();
@@ -671,25 +710,25 @@ const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     {
-      urls: "turn:global.relay.metered.ca:80",
-      username: "32b0819c14efab2f2f28735a",
-      credential: "1ALjeGjsSRk5BuC4",
-    },
-    {
-      urls: "turn:global.relay.metered.ca:80?transport=tcp",
-      username: "32b0819c14efab2f2f28735a",
-      credential: "1ALjeGjsSRk5BuC4",
-    },
-    {
-      urls: "turn:global.relay.metered.ca:443",
-      username: "32b0819c14efab2f2f28735a",
-      credential: "1ALjeGjsSRk5BuC4",
-    },
-    {
-      urls: "turns:global.relay.metered.ca:443?transport=tcp",
-      username: "32b0819c14efab2f2f28735a",
-      credential: "1ALjeGjsSRk5BuC4",
-    }
+    urls: "turn:global.relay.metered.ca:80",
+    username: "32b0819c14efab2f2f28735a",
+    credential: "1ALjeGjsSRk5BuC4",
+  },
+  {
+    urls: "turn:global.relay.metered.ca:80?transport=tcp",
+    username: "32b0819c14efab2f2f28735a",
+    credential: "1ALjeGjsSRk5BuC4",
+  },
+  {
+    urls: "turn:global.relay.metered.ca:443",
+    username: "32b0819c14efab2f2f28735a",
+    credential: "1ALjeGjsSRk5BuC4",
+  },
+  {
+    urls: "turns:global.relay.metered.ca:443?transport=tcp",
+    username: "32b0819c14efab2f2f28735a",
+    credential: "1ALjeGjsSRk5BuC4",
+  }
   ]
 };
 
@@ -894,6 +933,7 @@ const _origStop  = stopTalk;
 function leaveChannel() {
   if (isTalking) stopTalk();
   stopPttHeartbeat();
+  if (presenceChecker) { clearInterval(presenceChecker); presenceChecker = null; }
   room?.get('members').get(myId).put({ name: myName, online: false, ts: Date.now() });
   Object.keys(peers).forEach(pid => closePeer(pid));
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
