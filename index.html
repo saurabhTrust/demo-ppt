@@ -708,28 +708,13 @@ async function joinChannel() {
 // ─── WebRTC helpers ───────────────────────────────────────────────────────────
 const RTC_CONFIG = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    {
-    urls: "turn:global.relay.metered.ca:80",
-    username: "32b0819c14efab2f2f28735a",
-    credential: "1ALjeGjsSRk5BuC4",
-  },
-  {
-    urls: "turn:global.relay.metered.ca:80?transport=tcp",
-    username: "32b0819c14efab2f2f28735a",
-    credential: "1ALjeGjsSRk5BuC4",
-  },
-  {
-    urls: "turn:global.relay.metered.ca:443",
-    username: "32b0819c14efab2f2f28735a",
-    credential: "1ALjeGjsSRk5BuC4",
-  },
-  {
-    urls: "turns:global.relay.metered.ca:443?transport=tcp",
-    username: "32b0819c14efab2f2f28735a",
-    credential: "1ALjeGjsSRk5BuC4",
-  }
-  ]
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    { urls: 'turn:global.relay.metered.ca:80',                 username: '3f56d5086c7e03e0b39a9ac2', credential: 'fIbtKcvc8KPvdULM' },
+    { urls: 'turn:global.relay.metered.ca:80?transport=tcp',   username: '3f56d5086c7e03e0b39a9ac2', credential: 'fIbtKcvc8KPvdULM' },
+    { urls: 'turn:global.relay.metered.ca:443',                username: '3f56d5086c7e03e0b39a9ac2', credential: 'fIbtKcvc8KPvdULM' },
+    { urls: 'turn:global.relay.metered.ca:443?transport=tcp',  username: '3f56d5086c7e03e0b39a9ac2', credential: 'fIbtKcvc8KPvdULM' }
+  ],
+  iceTransportPolicy: 'all'
 };
 
 function buildPC(peerId) {
@@ -778,11 +763,27 @@ function buildPC(peerId) {
     renderPeers();
     if (state === 'connected') log(`✓ Connected to ${peers[peerId].name}`);
     if (state === 'failed') {
-      log(`✗ Failed → ${peers[peerId].name}, retrying…`);
-      // Retry: the higher-ID side will re-offer
-      if (myId > peerId && !offerSent.has('retry-' + peerId)) {
+      log(`✗ Failed → ${peers[peerId].name}, retrying with TURN…`);
+      // Both sides attempt ICE restart; lower ID leads to avoid glare
+      if (myId < peerId && !offerSent.has('retry-' + peerId)) {
         offerSent.add('retry-' + peerId);
-        setTimeout(() => createOffer(peerId, peers[peerId].name), 1000);
+        setTimeout(() => {
+          if (peers[peerId]) {
+            // ICE restart on existing PC instead of full renegotiation
+            const existingPc = peers[peerId].pc;
+            if (existingPc && existingPc.signalingState === 'stable') {
+              existingPc.restartIce();
+              existingPc.createOffer({ iceRestart: true }).then(offer => {
+                return existingPc.setLocalDescription(offer);
+              }).then(() => {
+                sendSignal(peerId, { type: 'offer', sdp: existingPc.localDescription.sdp, fromName: myName, iceRestart: true });
+                log(`ICE restart → ${peers[peerId].name}`);
+              }).catch(() => createOffer(peerId, peers[peerId].name));
+            } else {
+              createOffer(peerId, peers[peerId].name);
+            }
+          }
+        }, 2000);
       }
     }
   };
@@ -810,8 +811,8 @@ async function handleSignal(fromId, raw) {
   }
 
   if (msg.type === 'offer') {
-    // Don't handle if we already sent them an offer and we're the lower ID (glare resolution)
-    if (offerSent.has(fromId) && myId < fromId) {
+    // Allow ICE restart offers through even if we already sent an offer
+    if (!msg.iceRestart && offerSent.has(fromId) && myId < fromId) {
       log(`Glare with ${peers[fromId].name}, ignoring their offer`);
       return;
     }
