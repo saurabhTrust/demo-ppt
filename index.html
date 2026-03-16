@@ -594,6 +594,13 @@ async function joinChannel() {
 
     if (data.online) {
       if (!peers[peerId]) {
+        // If same name exists under a different peerId (reconnect), close the old one
+        const dupId = Object.keys(peers).find(pid => pid !== peerId && peers[pid].name === data.name);
+        if (dupId) {
+          closePeer(dupId);
+          delete peers[dupId];
+          offerSent.delete(dupId);
+        }
         // New peer appeared
         peers[peerId] = { name: data.name, pc: null, connected: false, pendingCandidates: [] };
         log(`${data.name} joined`);
@@ -629,16 +636,34 @@ async function joinChannel() {
   });
 
   // ── Watch PTT state ──
+  let staleTimer = null;
   room.get('ptt').on((data) => {
     if (!data) return;
     if (data.who === myId) return;          // ignore our own echo
-    setChannelState(!!data.talking, data.whoName || null);
+    if (data.talking) {
+      setChannelState(true, data.whoName || null);
+      lastPttTs = data.ts || Date.now();
+      // Auto-release if no heartbeat for 6s (handles tab-close / crash)
+      clearTimeout(staleTimer);
+      staleTimer = setTimeout(() => {
+        if (channelBusy && !isTalking) {
+          log('Auto-released stale transmission');
+          setChannelState(false, null);
+        }
+      }, 6000);
+    } else {
+      clearTimeout(staleTimer);
+      setChannelState(false, null);
+    }
   });
 
   // ── Keepalive presence ──
   setInterval(() => {
     room.get('members').get(myId).put({ name: myName, online: true, ts: Date.now() });
   }, 12000);
+
+  // ── Start PTT heartbeat ──
+  startPttHeartbeat();
 }
 
 // ─── WebRTC helpers ───────────────────────────────────────────────────────────
@@ -819,9 +844,38 @@ function stopTalk(e) {
   room.get('ptt').put({ talking: false, who: myId, whoName: null, ts: Date.now() });
 }
 
+// ── Safety nets: release PTT if mouse/touch leaves button or window loses focus ──
+document.addEventListener('mouseup',  () => { if (isTalking) stopTalk(); });
+document.addEventListener('touchend', () => { if (isTalking) stopTalk(); });
+document.addEventListener('touchcancel', () => { if (isTalking) stopTalk(); });
+window.addEventListener('blur', () => { if (isTalking) stopTalk(); });
+// Also release if pointer leaves the document entirely
+document.addEventListener('mouseleave', () => { if (isTalking) stopTalk(); });
+
+// ── PTT heartbeat: broadcast "still talking" every 3s; if gap > 6s → auto-release ──
+let pttHeartbeat = null;
+let lastPttTs = 0;
+
+function startPttHeartbeat() {
+  pttHeartbeat = setInterval(() => {
+    if (isTalking && room) {
+      room.get('ptt').put({ talking: true, who: myId, whoName: myName, ts: Date.now() });
+    }
+  }, 3000);
+}
+
+function stopPttHeartbeat() {
+  if (pttHeartbeat) { clearInterval(pttHeartbeat); pttHeartbeat = null; }
+}
+
+// Override startTalk/stopTalk to manage heartbeat
+const _origStart = startTalk;
+const _origStop  = stopTalk;
+
 // ─── Leave ───────────────────────────────────────────────────────────────────
 function leaveChannel() {
   if (isTalking) stopTalk();
+  stopPttHeartbeat();
   room?.get('members').get(myId).put({ name: myName, online: false, ts: Date.now() });
   Object.keys(peers).forEach(pid => closePeer(pid));
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
