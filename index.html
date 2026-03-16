@@ -837,6 +837,19 @@ window.addEventListener('beforeunload', () => {
   if (isTalking) stopTalk();
 });
 document.getElementById('pttBtn')?.addEventListener('contextmenu', e => e.preventDefault());
+
+// ─── Auto-join from URL param ─────────────────────────────────────────────────
+// Supports: ?username=saurabh  and optionally ?room=myroom
+window.addEventListener('DOMContentLoaded', () => {
+  const params = new URLSearchParams(window.location.search);
+  const urlUser = params.get('username')?.trim();
+  const urlRoom = params.get('room')?.trim();
+  if (urlUser) {
+    document.getElementById('usernameInput').value = urlUser;
+    if (urlRoom) document.getElementById('roomInput').value = urlRoom;
+    joinChannel();
+  }
+});
 </script>
 </body>
 </html>
