@@ -670,8 +670,26 @@ async function joinChannel() {
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
+    {
+      urls: "turn:global.relay.metered.ca:80",
+      username: "32b0819c14efab2f2f28735a",
+      credential: "1ALjeGjsSRk5BuC4",
+    },
+    {
+      urls: "turn:global.relay.metered.ca:80?transport=tcp",
+      username: "32b0819c14efab2f2f28735a",
+      credential: "1ALjeGjsSRk5BuC4",
+    },
+    {
+      urls: "turn:global.relay.metered.ca:443",
+      username: "32b0819c14efab2f2f28735a",
+      credential: "1ALjeGjsSRk5BuC4",
+    },
+    {
+      urls: "turns:global.relay.metered.ca:443?transport=tcp",
+      username: "32b0819c14efab2f2f28735a",
+      credential: "1ALjeGjsSRk5BuC4",
+    }
   ]
 };
 
